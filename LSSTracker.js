@@ -32,167 +32,22 @@
 
   // Configuration
   const CONFIG = {
-    checkInterval: 30000, // 30 seconds
+    checkInterval: 30000,
     maxMissions: 10000,
     showNotifications: true,
     maxConcurrentRequests: 3,
-    profileCacheTime: 24 * 60 * 60 * 1000, // 24 hours
-    missionCacheTime: 60 * 60 * 1000, // 1 hour
   }
 
-  // Data storage
-  let trackedMissions = JSON.parse(GM.getValue("lssTrackedMissions", "[]"))
+  // Mission storage
+  let trackedMissions = JSON.parse(GM.getValue("trackedMissions", "[]"))
   let processedMissionIds = new Set(trackedMissions.map(m => m.id))
-  let playerProfiles = JSON.parse(GM.getValue("lssPlayerProfiles", "{}"))
-  let playerStats = JSON.parse(GM.getValue("lssPlayerStats", "{}"))
-  let isTracking = GM.getValue("lssIsTracking", false)
-  let lastCheck = GM.getValue("lssLastCheck", 0)
-  let isMinimized = GM.getValue("lssIsMinimized", false)
-  let currentTimeFilter = GM.getValue("lssCurrentTimeFilter", "week")
-  
+  let playerProfiles = JSON.parse(GM.getValue("playerProfiles", "{}")) // Cache player profile data with history
+  let isTracking = GM.getValue("isTracking", false)
+  let lastCheck = GM.getValue("lastCheck", 0)
+  let isMinimized = GM.getValue("isMinimized", false)
+  let currentTimeFilter = GM.getValue("currentTimeFilter", "week") // day, week, month, lifetime
   const processingQueue = []
   let activeRequests = 0
-
-  // Add CSS styles
-  GM.addStyle(`
-    .lss-tracker-panel {
-      position: fixed;
-      top: 10px;
-      right: 10px;
-      width: 400px;
-      max-height: 80vh;
-      background: #1a1a1a;
-      color: #fff;
-      border: 2px solid #007bff;
-      border-radius: 8px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.8);
-      z-index: 10000;
-      font-family: Arial, sans-serif;
-      font-size: 12px;
-      overflow: hidden;
-    }
-    
-    .lss-tracker-header {
-      background: #007bff;
-      padding: 10px 15px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      cursor: move;
-    }
-    
-    .lss-tracker-content {
-      padding: 15px;
-      max-height: 70vh;
-      overflow-y: auto;
-    }
-    
-    .lss-tracker-minimized .lss-tracker-content {
-      display: none;
-    }
-    
-    .lss-tracker-button {
-      background: #007bff;
-      color: white;
-      border: none;
-      padding: 8px 12px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 11px;
-      margin: 2px;
-    }
-    
-    .lss-tracker-button:hover {
-      background: #0056b3;
-    }
-    
-    .lss-tracker-button.danger {
-      background: #dc3545;
-    }
-    
-    .lss-tracker-button.danger:hover {
-      background: #c82333;
-    }
-    
-    .lss-tracker-button.success {
-      background: #28a745;
-    }
-    
-    .lss-tracker-button.success:hover {
-      background: #218838;
-    }
-    
-    .lss-tracker-table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 10px;
-      font-size: 11px;
-    }
-    
-    .lss-tracker-table th,
-    .lss-tracker-table td {
-      border: 1px solid #444;
-      padding: 4px 6px;
-      text-align: left;
-    }
-    
-    .lss-tracker-table th {
-      background: #333;
-      font-weight: bold;
-    }
-    
-    .lss-tracker-table tr:nth-child(even) {
-      background: #2a2a2a;
-    }
-    
-    .lss-tracker-hud {
-      position: fixed;
-      top: 100px;
-      left: 10px;
-      background: rgba(0, 0, 0, 0.8);
-      color: #00ff00;
-      padding: 10px;
-      border-radius: 5px;
-      font-family: 'Courier New', monospace;
-      font-size: 12px;
-      z-index: 9999;
-      min-width: 200px;
-    }
-    
-    .lss-tracker-tab {
-      display: inline-block;
-      padding: 8px 12px;
-      background: #333;
-      color: #fff;
-      cursor: pointer;
-      border: none;
-      margin-right: 2px;
-    }
-    
-    .lss-tracker-tab.active {
-      background: #007bff;
-    }
-    
-    .lss-tracker-tab-content {
-      display: none;
-    }
-    
-    .lss-tracker-tab-content.active {
-      display: block;
-    }
-    
-    .lss-tracker-filter {
-      margin: 10px 0;
-    }
-    
-    .lss-tracker-filter select {
-      background: #333;
-      color: #fff;
-      border: 1px solid #555;
-      padding: 5px;
-      border-radius: 3px;
-    }
-  `)
 
   // Enhanced profile verification
   function verifyUserProfile() {
@@ -238,345 +93,17 @@
     return { userId, userName }
   }
 
-  // Get time filter boundaries
-  function getTimeFilterBoundaries(filter) {
-    const now = new Date()
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    
-    switch (filter) {
-      case 'day':
-        return {
-          start: today.getTime(),
-          end: now.getTime(),
-          label: 'Heute'
-        }
-      case 'week':
-        const weekStart = new Date(today)
-        weekStart.setDate(today.getDate() - 7)
-        return {
-          start: weekStart.getTime(),
-          end: now.getTime(),
-          label: 'Letzte 7 Tage'
-        }
-      case 'month':
-        const monthStart = new Date(today)
-        monthStart.setDate(today.getDate() - 30)
-        return {
-          start: monthStart.getTime(),
-          end: now.getTime(),
-          label: 'Letzte 30 Tage'
-        }
-      case 'lifetime':
-      default:
-        return {
-          start: 0,
-          end: now.getTime(),
-          label: 'Gesamtzeit'
-        }
-    }
-  }
-
-  // HTTP request wrapper
-  function makeRequest(url) {
-    return new Promise((resolve, reject) => {
-      GM.xmlhttpRequest({
-        method: 'GET',
-        url: url,
-        timeout: 10000,
-        onload: (response) => {
-          if (response.status === 200) {
-            resolve(response.responseText)
-          } else {
-            reject(new Error(`HTTP ${response.status}`))
-          }
-        },
-        onerror: reject,
-        ontimeout: () => reject(new Error('Timeout'))
-      })
-    })
-  }
-
-  // Fetch player profile data
-  async function fetchPlayerProfile(playerId) {
-    if (playerProfiles[playerId] && 
-        Date.now() - playerProfiles[playerId].lastUpdated < CONFIG.profileCacheTime) {
-      return playerProfiles[playerId]
-    }
-
-    try {
-      const html = await makeRequest(`https://www.leitstellenspiel.de/profile/${playerId}`)
-      const parser = new DOMParser()
-      const doc = parser.parseFromString(html, 'text/html')
-      
-      const nameElement = doc.querySelector('h1')
-      const creditsElement = doc.querySelector('[data-credits-earned]')
-      
-      const profile = {
-        id: playerId,
-        name: nameElement ? nameElement.textContent.trim() : `Player ${playerId}`,
-        totalCredits: creditsElement ? parseInt(creditsElement.getAttribute('data-credits-earned')) || 0 : 0,
-        lastUpdated: Date.now()
-      }
-      
-      playerProfiles[playerId] = profile
-      savePlayerProfiles()
-      
-      return profile
-    } catch (error) {
-      console.error(`Failed to fetch profile for player ${playerId}:`, error)
-      return {
-        id: playerId,
-        name: `Player ${playerId}`,
-        totalCredits: 0,
-        lastUpdated: Date.now()
-      }
-    }
-  }
-
-  // Parse mission page for player data
-  async function parseMissionPage(missionId, missionUrl) {
-    try {
-      const html = await makeRequest(missionUrl)
-      const parser = new DOMParser()
-      const doc = parser.parseFromString(html, 'text/html')
-      
-      const missionData = {
-        id: missionId,
-        url: missionUrl,
-        timestamp: Date.now(),
-        players: new Set(),
-        vehicleParticipants: new Set(),
-        credits: 0,
-        sharedCredits: 0,
-        presenceCredits: 0
-      }
-
-      // Extract mission title
-      const titleElement = doc.querySelector('h1')
-      missionData.title = titleElement ? titleElement.textContent.trim() : `Mission ${missionId}`
-
-      // Extract credits information
-      const creditsText = doc.body.textContent
-      const creditsMatch = creditsText.match(/(\d+)\s*Credits/)
-      if (creditsMatch) {
-        missionData.credits = parseInt(creditsMatch[1])
-      }
-
-      // Find shared credits
-      const sharedMatch = creditsText.match(/Geteilt:\s*(\d+)\s*Credits/i)
-      if (sharedMatch) {
-        missionData.sharedCredits = parseInt(sharedMatch[1])
-      }
-
-      // Extract player information from vehicle assignments
-      const vehicleRows = doc.querySelectorAll('tr')
-      vehicleRows.forEach(row => {
-        const cells = row.querySelectorAll('td')
-        if (cells.length >= 2) {
-          const vehicleCell = cells[0]
-          const playerLink = vehicleCell.querySelector('a[href*="/profile/"]')
-          
-          if (playerLink) {
-            const playerMatch = playerLink.href.match(/\/profile\/(\d+)/)
-            if (playerMatch) {
-              const playerId = parseInt(playerMatch[1])
-              missionData.players.add(playerId)
-              missionData.vehicleParticipants.add(playerId)
-            }
-          }
-        }
-      })
-
-      // Also check for players in mission chat/comments
-      const chatElements = doc.querySelectorAll('.mission_chat_message, .comment')
-      chatElements.forEach(element => {
-        const playerLink = element.querySelector('a[href*="/profile/"]')
-        if (playerLink) {
-          const playerMatch = playerLink.href.match(/\/profile\/(\d+)/)
-          if (playerMatch) {
-            const playerId = parseInt(playerMatch[1])
-            missionData.players.add(playerId)
-          }
-        }
-      })
-
-      // Convert Sets to Arrays for storage
-      missionData.players = Array.from(missionData.players)
-      missionData.vehicleParticipants = Array.from(missionData.vehicleParticipants)
-
-      return missionData
-    } catch (error) {
-      console.error(`Failed to parse mission ${missionId}:`, error)
-      return null
-    }
-  }
-
-  // Process mission queue
-  async function processQueue() {
-    if (activeRequests >= CONFIG.maxConcurrentRequests || processingQueue.length === 0) {
-      return
-    }
-
-    activeRequests++
-    const { missionId, missionUrl } = processingQueue.shift()
-
-    try {
-      const missionData = await parseMissionPage(missionId, missionUrl)
-      if (missionData) {
-        trackedMissions.push(missionData)
-        processedMissionIds.add(missionId)
-        
-        // Update player statistics
-        await updatePlayerStats(missionData)
-        
-        saveTrackedMissions()
-        updateUI()
-        
-        showNotification(`Mission ${missionData.title} verarbeitet`, "success")
-      }
-    } catch (error) {
-      console.error(`Error processing mission ${missionId}:`, error)
-    } finally {
-      activeRequests--
-      setTimeout(processQueue, 1000) // Process next item after 1 second
-    }
-  }
-
-  // Update player statistics
-  async function updatePlayerStats(missionData) {
-    for (const playerId of missionData.players) {
-      if (!playerStats[playerId]) {
-        playerStats[playerId] = {
-          totalMissions: 0,
-          totalSharedCredits: 0,
-          totalPresenceCredits: 0,
-          vehicleParticipations: 0,
-          lastSeen: 0
-        }
-      }
-
-      const stats = playerStats[playerId]
-      stats.totalMissions++
-      stats.lastSeen = Math.max(stats.lastSeen, missionData.timestamp)
-
-      // Award shared credits to all participants
-      if (missionData.sharedCredits > 0) {
-        stats.totalSharedCredits += missionData.sharedCredits
-      }
-
-      // Award presence credits (full mission credits to each present player)
-      if (missionData.credits > 0) {
-        stats.totalPresenceCredits += missionData.credits
-      }
-
-      // Track vehicle participation
-      if (missionData.vehicleParticipants.includes(playerId)) {
-        stats.vehicleParticipations++
-      }
-
-      // Fetch player profile for total credits calculation
-      await fetchPlayerProfile(playerId)
-    }
-
-    GM.setValue("lssPlayerStats", JSON.stringify(playerStats))
-  }
-
-  // Calculate statistics for time filter
-  function calculateFilteredStats() {
-    const { start, end } = getTimeFilterBoundaries(currentTimeFilter)
-    const filteredMissions = trackedMissions.filter(m => m.timestamp >= start && m.timestamp <= end)
-    
-    const stats = {}
-    
-    filteredMissions.forEach(mission => {
-      mission.players.forEach(playerId => {
-        if (!stats[playerId]) {
-          stats[playerId] = {
-            missions: 0,
-            sharedCredits: 0,
-            presenceCredits: 0,
-            vehicleParticipations: 0
-          }
-        }
-        
-        stats[playerId].missions++
-        stats[playerId].sharedCredits += mission.sharedCredits || 0
-        stats[playerId].presenceCredits += mission.credits || 0
-        
-        if (mission.vehicleParticipants.includes(playerId)) {
-          stats[playerId].vehicleParticipations++
-        }
-      })
-    })
-    
-    return stats
-  }
-
-  // Scan for new missions
-  async function scanForMissions() {
-    if (!verifyUserProfile()) return
-
-    try {
-      // Check current page for mission links
-      const missionLinks = document.querySelectorAll('a[href*="/missions/"]')
-      let newMissions = 0
-
-      missionLinks.forEach(link => {
-        const match = link.href.match(/\/missions\/(\d+)/)
-        if (match) {
-          const missionId = parseInt(match[1])
-          if (!processedMissionIds.has(missionId)) {
-            processingQueue.push({
-              missionId: missionId,
-              missionUrl: link.href
-            })
-            newMissions++
-          }
-        }
-      })
-
-      if (newMissions > 0) {
-        showNotification(`${newMissions} neue Missionen gefunden`, "info")
-        processQueue()
-      }
-
-      // Also scan mission list page if we're on it
-      if (window.location.pathname.includes('/missions')) {
-        const missionRows = document.querySelectorAll('tr[id^="mission_"]')
-        missionRows.forEach(row => {
-          const link = row.querySelector('a[href*="/missions/"]')
-          if (link) {
-            const match = link.href.match(/\/missions\/(\d+)/)
-            if (match) {
-              const missionId = parseInt(match[1])
-              if (!processedMissionIds.has(missionId)) {
-                processingQueue.push({
-                  missionId: missionId,
-                  missionUrl: link.href
-                })
-                newMissions++
-              }
-            }
-          }
-        })
-      }
-
-    } catch (error) {
-      console.error('Error scanning for missions:', error)
-    }
-  }
-
   // Add button to navbar
   function addNavbarButton() {
     if (!verifyUserProfile()) return
 
     const navbar = document.querySelector('.nav.navbar-nav.navbar-right')
-    if (navbar && !document.getElementById('lss-tracker-btn')) {
+    if (navbar && !document.getElementById('player-stats-btn')) {
       const li = document.createElement('li')
       li.innerHTML = `
-        <a href="#" id="lss-tracker-btn" title="LSSTracker - Player Statistics">
+        <a href="#" id="player-stats-btn" title="Player Statistics Tracker">
           <img class="navbar-icon" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJ3aGl0ZSI+PHBhdGggZD0iTTMgM3YxOGgxOFYzSDN6bTIgMmgxNHYxNEg1VjV6bTIgMmg0djJIN3ptMCA0aDR2Mkg3em0wIDRoNHYySDd6Ii8+PC9zdmc+" width="24" height="24">
-          <span class="visible-xs">LSSTracker</span>
+          <span class="visible-xs">Stats</span>
         </a>
       `
       
@@ -587,7 +114,7 @@
         navbar.appendChild(li)
       }
       
-      document.getElementById('lss-tracker-btn').addEventListener('click', (e) => {
+      document.getElementById('player-stats-btn').addEventListener('click', (e) => {
         e.preventDefault()
         if (verifyUserProfile()) {
           toggleUI()
@@ -596,56 +123,501 @@
     }
   }
 
-  // Create HUD display
-  function createHUD() {
-    const existingHUD = document.getElementById('lss-tracker-hud')
-    if (existingHUD) {
-      existingHUD.remove()
+  // Get time filter boundaries
+  function getTimeFilterBoundaries(filter) {
+    const now = new Date()
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    
+    switch (filter) {
+      case 'day':
+        return {
+          start: today.getTime(),
+          end: now.getTime(),
+          label: 'Today'
+        }
+      case 'week':
+        const weekStart = new Date(today)
+        weekStart.setDate(today.getDate() - 7)
+        return {
+          start: weekStart.getTime(),
+          end: now.getTime(),
+          label: 'Last 7 Days'
+        }
+      case 'month':
+        const monthStart = new Date(today)
+        monthStart.setDate(today.getDate() - 30)
+        return {
+          start: monthStart.getTime(),
+          end: now.getTime(),
+          label: 'Last 30 Days'
+        }
+      case 'lifetime':
+      default:
+        return {
+          start: 0,
+          end: now.getTime(),
+          label: 'All Time'
+        }
     }
+  }
 
-    const filteredStats = calculateFilteredStats()
-    const totalSharedCredits = Object.values(filteredStats).reduce((sum, stats) => sum + stats.sharedCredits, 0)
-    const totalMissions = trackedMissions.filter(m => {
-      const { start, end } = getTimeFilterBoundaries(currentTimeFilter)
-      return m.timestamp >= start && m.timestamp <= end
-    }).length
+  // Toggle UI visibility
+  function toggleUI() {
+    const existingPanel = document.getElementById("mission-tracker-panel")
+    if (existingPanel) {
+      existingPanel.remove()
+    } else {
+      createUI()
+    }
+  }
 
-    const hud = document.createElement('div')
-    hud.id = 'lss-tracker-hud'
-    hud.className = 'lss-tracker-hud'
-    hud.innerHTML = `
-      <div><strong>📊 LSSTracker HUD</strong></div>
-      <div>Status: ${isTracking ? '🟢 Aktiv' : '🔴 Gestoppt'}</div>
-      <div>Missionen: ${totalMissions}</div>
-      <div>Geteilte Credits: ${totalSharedCredits.toLocaleString()}</div>
-      <div>Filter: ${getTimeFilterBoundaries(currentTimeFilter).label}</div>
-      <div>Spieler: ${Object.keys(filteredStats).length}</div>
-    `
+  // Create UI Panel
+  function createUI() {
+    const timeFilter = getTimeFilterBoundaries(currentTimeFilter)
+    const playerStats = calculatePlayerStats(timeFilter)
+    const topPlayers = Object.entries(playerStats)
+      .sort(([, a], [, b]) => b.totalCredits - a.totalCredits)
+      .slice(0, 5)
 
-    document.body.appendChild(hud)
+    const panel = document.createElement("div")
+    panel.id = "mission-tracker-panel"
+    panel.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 10px;
+                right: 10px;
+                width: 420px;
+                background: #000;
+                color: #fff;
+                border: 2px solid #007bff;
+                border-radius: 8px;
+                padding: 15px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.8);
+                z-index: 10000;
+                font-family: Arial, sans-serif;
+                font-size: 12px;
+                ${isMinimized ? "height: 50px; overflow: hidden;" : ""}
+            ">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0; color: #007bff;">📊 Player Statistics Tracker</h3>
+                    <div>
+                        <button id="minimize-panel" style="
+                            background: none;
+                            border: none;
+                            font-size: 18px;
+                            cursor: pointer;
+                            color: #007bff;
+                            margin-right: 10px;
+                        ">${isMinimized ? "➕" : "➖"}</button>
+                        <button id="close-panel" style="
+                            background: none;
+                            border: none;
+                            font-size: 18px;
+                            cursor: pointer;
+                            color: #ff4444;
+                        ">✕</button>
+                    </div>
+                </div>
 
-    // Make HUD draggable
-    let isDragging = false
-    let dragOffset = { x: 0, y: 0 }
+                <div id="panel-content" style="${isMinimized ? "display: none;" : ""}">
+                    <div style="margin-bottom: 15px;">
+                        <button id="toggle-tracking" style="
+                            background: ${isTracking ? "#dc3545" : "#28a745"};
+                            color: white;
+                            border: none;
+                            padding: 10px 16px;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            margin-right: 8px;
+                            font-weight: bold;
+                        ">${isTracking ? "⏹️ Stop" : "▶️ Start"} Tracking</button>
 
-    hud.addEventListener('mousedown', (e) => {
-      isDragging = true
-      dragOffset.x = e.clientX - hud.offsetLeft
-      dragOffset.y = e.clientY - hud.offsetTop
-      hud.style.cursor = 'grabbing'
-    })
+                        <button id="export-player-csv" style="
+                            background: #17a2b8;
+                            color: white;
+                            border: none;
+                            padding: 10px 16px;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            font-weight: bold;
+                        ">📊 Export Stats</button>
+                    </div>
 
-    document.addEventListener('mousemove', (e) => {
-      if (isDragging) {
-        hud.style.left = (e.clientX - dragOffset.x) + 'px'
-        hud.style.top = (e.clientY - dragOffset.y) + 'px'
+                    <div style="background: #333; color: #fff; padding: 10px; border-radius: 4px; margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <span><strong>Status:</strong></span>
+                            <span id="tracking-status">${isTracking ? "🟢 Active" : "🔴 Stopped"}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <span><strong>Time Filter:</strong></span>
+                            <span id="time-filter-display">${timeFilter.label}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <span><strong>Total Missions:</strong></span>
+                            <span id="mission-count">${trackedMissions.length}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <span><strong>Active Players:</strong></span>
+                            <span id="player-count">${Object.keys(playerStats).length}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <span><strong>Processing:</strong></span>
+                            <span id="processing-count">0</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span><strong>Last Check:</strong></span>
+                            <span id="last-check">${lastCheck ? new Date(lastCheck).toLocaleTimeString() : "Never"}</span>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <div style="margin-bottom: 10px;">
+                            <strong>📅 Time Filter:</strong>
+                        </div>
+                        <div style="display: flex; gap: 5px; flex-wrap: wrap;">
+                            <button id="filter-day" style="
+                                background: ${currentTimeFilter === 'day' ? '#007bff' : '#6c757d'};
+                                color: white;
+                                border: none;
+                                padding: 6px 10px;
+                                border-radius: 4px;
+                                cursor: pointer;
+                                font-size: 11px;
+                            ">Today</button>
+                            <button id="filter-week" style="
+                                background: ${currentTimeFilter === 'week' ? '#007bff' : '#6c757d'};
+                                color: white;
+                                border: none;
+                                padding: 6px 10px;
+                                border-radius: 4px;
+                                cursor: pointer;
+                                font-size: 11px;
+                            ">7 Days</button>
+                            <button id="filter-month" style="
+                                background: ${currentTimeFilter === 'month' ? '#007bff' : '#6c757d'};
+                                color: white;
+                                border: none;
+                                padding: 6px 10px;
+                                border-radius: 4px;
+                                cursor: pointer;
+                                font-size: 11px;
+                            ">30 Days</button>
+                            <button id="filter-lifetime" style="
+                                background: ${currentTimeFilter === 'lifetime' ? '#007bff' : '#6c757d'};
+                                color: white;
+                                border: none;
+                                padding: 6px 10px;
+                                border-radius: 4px;
+                                cursor: pointer;
+                                font-size: 11px;
+                            ">All Time</button>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <button id="view-player-stats" style="
+                            background: #6c757d;
+                            color: white;
+                            border: none;
+                            padding: 8px 12px;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            margin-right: 8px;
+                        ">👁️ View All Players</button>
+
+                        <button id="view-missions" style="
+                            background: #6f42c1;
+                            color: white;
+                            border: none;
+                            padding: 8px 12px;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            margin-right: 8px;
+                        ">📋 View Missions</button>
+
+                        <button id="clear-data" style="
+                            background: #ffc107;
+                            color: black;
+                            border: none;
+                            padding: 8px 12px;
+                            border-radius: 4px;
+                            cursor: pointer;
+                        ">🗑️ Clear</button>
+                    </div>
+
+                    <div style="margin-bottom: 10px;">
+                        <strong>🏆 Top Players (${timeFilter.label}):</strong>
+                    </div>
+
+                    <div id="top-players" style="
+                        max-height: 200px;
+                        overflow-y: auto;
+                        border: 1px solid #555;
+                        padding: 8px;
+                        background: #222;
+                        border-radius: 4px;
+                    ">
+                        ${
+                          topPlayers.length > 0
+                            ? topPlayers
+                                .map(
+                                  ([playerName, stats], index) => `
+                            <div style="margin-bottom: 8px; padding: 6px; border-left: 3px solid ${index === 0 ? "#ffd700" : index === 1 ? "#c0c0c0" : index === 2 ? "#cd7f32" : "#007bff"}; background: #444; border-radius: 3px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div>
+                                        <div style="font-weight: bold; font-size: 12px; color: #fff;">${index + 1}. ${playerName}</div>
+                                        <div style="font-size: 10px; color: #ccc;">
+                                            📤 ${stats.missionCount} shared | 🚗 ${stats.missionsPresent || 0} present
+                                        </div>
+                                    </div>
+                                    <div style="text-align: right;">
+                                        <div style="font-weight: bold; color: #28a745; font-size: 11px;">
+                                            💰 ${stats.totalCredits.toLocaleString()}
+                                        </div>
+                                        <div style="font-size: 9px; color: #17a2b8;">
+                                            Growth: ${stats.growthPercentage || 'N/A'}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        `,
+                                )
+                                .join("")
+                            : '<div style="font-size: 11px; color: #ccc; text-align: center;">No player data yet...</div>'
+                        }
+                    </div>
+                </div>
+            </div>
+        `
+
+    document.body.appendChild(panel)
+    setupEventListeners()
+  }
+
+  // Calculate player statistics with time filtering
+  function calculatePlayerStats(timeFilter) {
+    const stats = {}
+
+    trackedMissions.forEach((mission) => {
+      const missionTime = new Date(mission.timestamp).getTime()
+      const inTimeRange = missionTime >= timeFilter.start && missionTime <= timeFilter.end
+
+      if (!inTimeRange && timeFilter.start > 0) return // Skip if outside time range (except for lifetime)
+
+      // Track mission sharing
+      const sharedBy = mission.sharedBy || "Unknown Member"
+      if (sharedBy !== "Unknown Member") {
+        if (!stats[sharedBy]) {
+          stats[sharedBy] = {
+            missionCount: 0,
+            totalCredits: 0,
+            missionsPresent: 0,
+            presenceCredits: 0,
+            missions: [],
+            growthPercentage: null,
+          }
+        }
+        stats[sharedBy].missionCount++
+        stats[sharedBy].totalCredits += mission.credits || 0
+        stats[sharedBy].missions.push(mission)
+      }
+
+      // Track vehicle presence
+      if (mission.presentPlayers && mission.presentPlayers.length > 0) {
+        mission.presentPlayers.forEach(playerName => {
+          if (!stats[playerName]) {
+            stats[playerName] = {
+              missionCount: 0,
+              totalCredits: 0,
+              missionsPresent: 0,
+              presenceCredits: 0,
+              missions: [],
+              growthPercentage: null,
+            }
+          }
+          stats[playerName].missionsPresent++
+          stats[playerName].presenceCredits += mission.credits || 0
+        })
       }
     })
 
-    document.addEventListener('mouseup', () => {
-      isDragging = false
-      hud.style.cursor = 'grab'
+    // Calculate growth percentages
+    Object.keys(stats).forEach(playerName => {
+      const profileData = playerProfiles[playerName]
+      if (profileData && profileData.history && profileData.history.length >= 2) {
+        const growthPercentage = calculateGrowthPercentage(playerName, stats[playerName].presenceCredits, timeFilter)
+        stats[playerName].growthPercentage = growthPercentage
+      }
     })
+
+    return stats
+  }
+
+  // Calculate what percentage of recent growth came from presence credits
+  function calculateGrowthPercentage(playerName, presenceCredits, timeFilter) {
+    const profileData = playerProfiles[playerName]
+    if (!profileData || !profileData.history || profileData.history.length < 2) {
+      return 'N/A'
+    }
+
+    // Find the closest historical data points for the time period
+    const now = Date.now()
+    const periodStart = timeFilter.start
+
+    // Get current total earnings
+    const currentEarnings = profileData.totalEarnings || 0
+
+    // Find historical earnings at the start of the period
+    let historicalEarnings = currentEarnings
+    for (let i = profileData.history.length - 1; i >= 0; i--) {
+      const historyEntry = profileData.history[i]
+      if (historyEntry.timestamp <= periodStart) {
+        historicalEarnings = historyEntry.totalEarnings
+        break
+      }
+    }
+
+    const totalGrowth = currentEarnings - historicalEarnings
+    
+    if (totalGrowth <= 0) {
+      return '0%'
+    }
+
+    const percentage = ((presenceCredits / totalGrowth) * 100).toFixed(1)
+    return `${percentage}%`
+  }
+
+  // Fetch player profile data with history tracking
+  function fetchPlayerProfile(playerName, playerId) {
+    GM.xmlhttpRequest({
+      method: "GET",
+      url: `https://www.leitstellenspiel.de/profile/${playerId}`,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      },
+      onload: (response) => {
+        try {
+          const parser = new DOMParser()
+          const doc = parser.parseFromString(response.responseText, "text/html")
+          
+          const userinfoDiv = doc.querySelector('#userinfo[data-credits-earned]')
+          if (userinfoDiv) {
+            const totalEarnings = parseInt(userinfoDiv.getAttribute('data-credits-earned')) || 0
+            const now = Date.now()
+
+            if (!playerProfiles[playerName]) {
+              playerProfiles[playerName] = {
+                totalEarnings: totalEarnings,
+                lastUpdated: now,
+                history: []
+              }
+            }
+
+            // Update current earnings and add to history
+            const oldEarnings = playerProfiles[playerName].totalEarnings
+            playerProfiles[playerName].totalEarnings = totalEarnings
+            playerProfiles[playerName].lastUpdated = now
+
+            // Add to history if earnings changed
+            if (oldEarnings !== totalEarnings) {
+              playerProfiles[playerName].history.push({
+                timestamp: now,
+                totalEarnings: totalEarnings
+              })
+
+              // Keep only last 100 history entries
+              if (playerProfiles[playerName].history.length > 100) {
+                playerProfiles[playerName].history = playerProfiles[playerName].history.slice(-100)
+              }
+            }
+
+            GM.setValue("playerProfiles", JSON.stringify(playerProfiles))
+            console.log(`Updated profile for ${playerName}: ${totalEarnings.toLocaleString()} total credits`)
+          }
+        } catch (error) {
+          console.error(`Error parsing profile for ${playerName}:`, error)
+        }
+      },
+      onerror: (error) => {
+        console.error(`Error fetching profile for ${playerName}:`, error)
+      },
+    })
+  }
+
+  // Extract player ID from profile links and fetch profiles
+  function extractAndFetchPlayerProfiles(html) {
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(html, "text/html")
+    
+    const profileLinks = doc.querySelectorAll('a[href*="/profile/"]')
+    profileLinks.forEach(link => {
+      const href = link.getAttribute('href')
+      const playerName = link.textContent.trim()
+      const playerIdMatch = href.match(/\/profile\/(\d+)/)
+      
+      if (playerIdMatch && playerName) {
+        const playerId = playerIdMatch[1]
+        // Fetch profile data if we don't have it or it's old (older than 1 hour)
+        if (!playerProfiles[playerName] || 
+            (Date.now() - playerProfiles[playerName].lastUpdated > 60 * 60 * 1000)) {
+          setTimeout(() => fetchPlayerProfile(playerName, playerId), Math.random() * 2000)
+        }
+      }
+    })
+  }
+
+  // Setup event listeners
+  function setupEventListeners() {
+    document.getElementById("toggle-tracking").addEventListener("click", toggleTracking)
+    document.getElementById("export-player-csv").addEventListener("click", exportPlayerStatsToCSV)
+    document.getElementById("clear-data").addEventListener("click", clearData)
+    document.getElementById("view-player-stats").addEventListener("click", viewPlayerStats)
+    document.getElementById("view-missions").addEventListener("click", viewAllMissions)
+    document.getElementById("minimize-panel").addEventListener("click", toggleMinimize)
+    document.getElementById("close-panel").addEventListener("click", () => {
+      document.getElementById("mission-tracker-panel").remove()
+    })
+
+    // Time filter buttons
+    document.getElementById("filter-day").addEventListener("click", () => setTimeFilter('day'))
+    document.getElementById("filter-week").addEventListener("click", () => setTimeFilter('week'))
+    document.getElementById("filter-month").addEventListener("click", () => setTimeFilter('month'))
+    document.getElementById("filter-lifetime").addEventListener("click", () => setTimeFilter('lifetime'))
+  }
+
+  // Set time filter
+  function setTimeFilter(filter) {
+    currentTimeFilter = filter
+    GM.setValue("currentTimeFilter", filter)
+    
+    // Recreate UI with new filter
+    const existingPanel = document.getElementById("mission-tracker-panel")
+    if (existingPanel) {
+      existingPanel.remove()
+      createUI()
+    }
+  }
+
+  // Toggle minimize
+  function toggleMinimize() {
+    isMinimized = !isMinimized
+    GM.setValue("isMinimized", isMinimized)
+
+    const panel = document.getElementById("mission-tracker-panel")
+    const content = document.getElementById("panel-content")
+    const button = document.getElementById("minimize-panel")
+
+    if (isMinimized) {
+      panel.style.height = "50px"
+      panel.style.overflow = "hidden"
+      content.style.display = "none"
+      button.textContent = "➕"
+    } else {
+      panel.style.height = "auto"
+      panel.style.overflow = "visible"
+      content.style.display = "block"
+      button.textContent = "➖"
+    }
   }
 
   // Toggle tracking
@@ -653,25 +625,538 @@
     if (!verifyUserProfile()) return
 
     isTracking = !isTracking
-    GM.setValue("lssIsTracking", isTracking)
+    GM.setValue("isTracking", isTracking)
 
     const button = document.getElementById("toggle-tracking")
     const status = document.getElementById("tracking-status")
 
     if (isTracking) {
       button.textContent = "⏹️ Stop Tracking"
-      button.className = "lss-tracker-button danger"
-      if (status) status.textContent = "🟢 Aktiv"
+      button.style.background = "#dc3545"
+      status.textContent = "🟢 Active"
       startTracking()
-      showNotification("Spielerstatistik-Tracking gestartet!", "success")
+      showNotification("Player statistics tracking started!", "success")
     } else {
       button.textContent = "▶️ Start Tracking"
-      button.className = "lss-tracker-button success"
-      if (status) status.textContent = "🔴 Gestoppt"
-      showNotification("Spielerstatistik-Tracking gestoppt!", "info")
+      button.style.background = "#28a745"
+      status.textContent = "🔴 Stopped"
+      showNotification("Player statistics tracking stopped!", "info")
+    }
+  }
+
+  // Start tracking missions
+  function startTracking() {
+    if (!isTracking || !verifyUserProfile()) return
+
+    checkMissions()
+    setTimeout(startTracking, CONFIG.checkInterval)
+  }
+
+  // Check for new missions
+  function checkMissions() {
+    try {
+      const missionElements = document.querySelectorAll(
+        "#mission_list_alliance .missionSideBarEntry:not(.mission_deleted)",
+      )
+      let newMissionsFound = 0
+
+      missionElements.forEach((element) => {
+        const missionId = element.id?.replace("mission_", "") || ""
+        if (missionId && !processedMissionIds.has(missionId)) {
+          processingQueue.push(missionId)
+          processedMissionIds.add(missionId)
+          newMissionsFound++
+        }
+      })
+
+      if (newMissionsFound > 0) {
+        showNotification(`Found ${newMissionsFound} new mission(s)! Processing...`, "info")
+        processQueue()
+      }
+
+      lastCheck = Date.now()
+      GM.setValue("lastCheck", lastCheck)
+      const lastCheckElement = document.getElementById("last-check")
+      if (lastCheckElement) {
+        lastCheckElement.textContent = new Date(lastCheck).toLocaleTimeString()
+      }
+    } catch (error) {
+      console.error("Error checking missions:", error)
+    }
+  }
+
+  // Process mission queue
+  function processQueue() {
+    while (processingQueue.length > 0 && activeRequests < CONFIG.maxConcurrentRequests) {
+      const missionId = processingQueue.shift()
+      processMission(missionId)
+    }
+    updateProcessingCount()
+  }
+
+  // Process individual mission
+  function processMission(missionId) {
+    activeRequests++
+    updateProcessingCount()
+
+    const basicData = getBasicMissionData(missionId)
+
+    GM.xmlhttpRequest({
+      method: "GET",
+      url: `https://www.leitstellenspiel.de/missions/${missionId}`,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      },
+      onload: (response) => {
+        try {
+          extractAndFetchPlayerProfiles(response.responseText)
+          
+          const missionData = parseDetailedMissionData(response.responseText, missionId, basicData)
+          if (missionData && missionData.sharedBy !== "Unknown Member") {
+            trackedMissions.unshift(missionData)
+
+            if (trackedMissions.length > CONFIG.maxMissions) {
+              trackedMissions = trackedMissions.slice(0, CONFIG.maxMissions)
+            }
+
+            GM.setValue("trackedMissions", JSON.stringify(trackedMissions))
+            updateUI()
+            
+            const presentCount = missionData.presentPlayers ? missionData.presentPlayers.length : 0
+            showNotification(
+              `✅ ${missionData.sharedBy}: ${missionData.credits.toLocaleString()} credits | ${presentCount} players present`, 
+              "success"
+            )
+          }
+        } catch (error) {
+          console.error("Error parsing mission data:", error)
+        }
+
+        activeRequests--
+        updateProcessingCount()
+        processQueue()
+      },
+      onerror: (error) => {
+        console.error("Error fetching mission details:", error)
+        activeRequests--
+        updateProcessingCount()
+        processQueue()
+      },
+    })
+  }
+
+  // Get basic mission data from main page
+  function getBasicMissionData(missionId) {
+    try {
+      const element = document.getElementById(`mission_${missionId}`)
+      if (!element) return {}
+
+      let name = "Unknown Mission"
+      let address = "Unknown Address"
+
+      try {
+        const nameElement = element.querySelector(`#mission_caption_${missionId}`)
+        if (nameElement) name = nameElement.textContent.trim()
+      } catch (e) {}
+
+      try {
+        const addressElement = element.querySelector(`#mission_address_${missionId}`)
+        if (addressElement) address = addressElement.textContent.trim()
+      } catch (e) {}
+
+      return { name, address }
+    } catch (error) {
+      return {}
+    }
+  }
+
+  // Parse detailed mission data from mission page HTML
+  function parseDetailedMissionData(html, missionId, basicData) {
+    try {
+      const parser = new DOMParser()
+      const doc = parser.parseFromString(html, "text/html")
+
+      // Extract shared by from alert div
+      let sharedBy = "Unknown Member"
+      const alertDivs = doc.querySelectorAll(".alert.alert-info")
+      for (const div of alertDivs) {
+        const text = div.textContent
+        if (text.includes("freigegeben") || text.includes("wurde von")) {
+          const profileLink = div.querySelector('a[href*="/profile/"]')
+          if (profileLink) {
+            sharedBy = profileLink.textContent.trim()
+            break
+          }
+        }
+      }
+
+      // Extract present players from the vehicle table
+      const presentPlayers = new Set()
+      const vehicleTable = doc.querySelector("#mission_vehicle_at_mission")
+      if (vehicleTable) {
+        const vehicleRows = vehicleTable.querySelectorAll("tbody tr")
+        vehicleRows.forEach(row => {
+          const ownerLinks = row.querySelectorAll('a[href*="/profile/"]')
+          ownerLinks.forEach(link => {
+            const playerName = link.textContent.trim()
+            if (playerName && playerName !== sharedBy) {
+              presentPlayers.add(playerName)
+            }
+          })
+        })
+      }
+
+      // Get credits from help page
+      const credits = 5000
+      const helpLink = doc.querySelector("#mission_help")
+      if (helpLink) {
+        const helpUrl = helpLink.getAttribute("href")
+        if (helpUrl) {
+          fetchCreditsFromHelpPage(helpUrl, missionId)
+        }
+      }
+
+      return {
+        id: missionId,
+        name: basicData.name || "Unknown Mission",
+        address: basicData.address || "Unknown Address",
+        sharedBy: sharedBy,
+        credits: credits,
+        presentPlayers: Array.from(presentPlayers),
+        timestamp: new Date().toISOString(),
+        url: `https://www.leitstellenspiel.de/missions/${missionId}`,
+      }
+    } catch (error) {
+      console.error("Error parsing detailed mission data:", error)
+      return null
+    }
+  }
+
+  // Fetch credits from help page
+  function fetchCreditsFromHelpPage(helpUrl, missionId) {
+    GM.xmlhttpRequest({
+      method: "GET",
+      url: `https://www.leitstellenspiel.de${helpUrl}`,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      },
+      onload: (response) => {
+        try {
+          const parser = new DOMParser()
+          const doc = parser.parseFromString(response.responseText, "text/html")
+
+          const rows = doc.querySelectorAll("table.table-striped tbody tr")
+          let credits = 5000
+
+          rows.forEach((row) => {
+            const cells = row.querySelectorAll("td")
+            if (cells.length >= 2) {
+              const label = cells[0].textContent.trim()
+              if (label.includes("Credits im Durchschnitt")) {
+                const creditText = cells[1].textContent.trim()
+                const creditMatch = creditText.match(/(\d+)/)
+                if (creditMatch) {
+                  credits = Number.parseInt(creditMatch[1])
+                }
+              }
+            }
+          })
+
+          const mission = trackedMissions.find((m) => m.id === missionId)
+          if (mission) {
+            mission.credits = credits
+            GM.setValue("trackedMissions", JSON.stringify(trackedMissions))
+            updateUI()
+          }
+        } catch (error) {
+          console.error("Error parsing credits:", error)
+        }
+      },
+      onerror: () => {
+        console.log("Failed to fetch credits for mission", missionId)
+      },
+    })
+  }
+
+  // Export Player Statistics to CSV
+  function exportPlayerStatsToCSV() {
+    const timeFilter = getTimeFilterBoundaries(currentTimeFilter)
+    const playerStats = calculatePlayerStats(timeFilter)
+    const players = Object.entries(playerStats).sort(([, a], [, b]) => 
+      b.totalCredits - a.totalCredits
+    )
+
+    if (players.length === 0) {
+      showNotification("No player statistics to export!", "warning")
+      return
     }
 
-    updateUI()
+    try {
+      const headers = [
+        "Player Name",
+        "Missions Shared",
+        "Missions Present", 
+        "Share Credits",
+        "Presence Credits",
+        "Growth % from Presence",
+      ]
+
+      const csvRows = [headers.join(",")]
+
+      players.forEach(([playerName, stats]) => {
+        const row = [
+          `"${playerName}"`, 
+          stats.missionCount, 
+          stats.missionsPresent || 0,
+          stats.totalCredits,
+          stats.presenceCredits || 0,
+          stats.growthPercentage || "N/A"
+        ]
+        csvRows.push(row.join(","))
+      })
+
+      const csvContent = csvRows.join("\n")
+      const filename = `leitstellenspiel_player_stats_${currentTimeFilter}_${new Date().toISOString().split("T")[0]}.csv`
+
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" })
+      const url = URL.createObjectURL(blob)
+
+      const link = document.createElement("a")
+      link.href = url
+      link.download = filename
+      link.style.display = "none"
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+
+      showNotification(`✅ Exported ${timeFilter.label} statistics for ${players.length} players!`, "success")
+    } catch (error) {
+      console.error("CSV Export Error:", error)
+      showNotification("❌ CSV export failed! Check console for details.", "error")
+    }
+  }
+
+  // View Player Statistics
+  function viewPlayerStats() {
+    const timeFilter = getTimeFilterBoundaries(currentTimeFilter)
+    const playerStats = calculatePlayerStats(timeFilter)
+    const players = Object.entries(playerStats).sort(([, a], [, b]) => 
+      b.totalCredits - a.totalCredits
+    )
+
+    const popup = window.open("", "playerstats", "width=1200,height=800,scrollbars=yes")
+    popup.document.write(`
+            <html>
+                <head>
+                    <title>Player Statistics - ${players.length} Players (${timeFilter.label})</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 20px; background: #000; color: #fff; }
+                        table { width: 100%; border-collapse: collapse; }
+                        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #555; }
+                        th { background-color: #333; font-weight: bold; position: sticky; top: 0; cursor: pointer; }
+                        th:hover { background-color: #444; }
+                        tr:hover { background-color: #222; }
+                        .credits { font-weight: bold; color: #28a745; }
+                        .presence-credits { font-weight: bold; color: #17a2b8; }
+                        .player-name { font-weight: bold; color: #007bff; }
+                        .stats { background: #333; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+                        .rank { font-weight: bold; }
+                        .percentage { font-weight: bold; color: #ffc107; }
+                        .no-data { color: #666; font-style: italic; }
+                    </style>
+                </head>
+                <body>
+                    <div class="stats">
+                        <h2>🏆 Player Statistics (${timeFilter.label})</h2>
+                        <p><strong>Total Players:</strong> ${players.length}</p>
+                        <p><strong>Total Missions:</strong> ${trackedMissions.length}</p>
+                        <p><strong>Time Period:</strong> ${timeFilter.label}</p>
+                    </div>
+
+                    <table id="playerTable">
+                        <thead>
+                            <tr>
+                                <th>Rank</th>
+                                <th>Player Name</th>
+                                <th>Missions Shared</th>
+                                <th>Missions Present</th>
+                                <th>Share Credits</th>
+                                <th>Presence Credits</th>
+                                <th>Growth % from Presence</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${players
+                              .map(
+                                ([playerName, stats], index) => {
+                                  return `
+                                <tr>
+                                    <td class="rank">#${index + 1}</td>
+                                    <td class="player-name">${playerName}</td>
+                                    <td>${stats.missionCount}</td>
+                                    <td>${stats.missionsPresent || 0}</td>
+                                    <td class="credits">${stats.totalCredits.toLocaleString()}</td>
+                                    <td class="presence-credits">${(stats.presenceCredits || 0).toLocaleString()}</td>
+                                    <td class="${stats.growthPercentage !== 'N/A' ? 'percentage' : 'no-data'}">
+                                        ${stats.growthPercentage || 'N/A'}
+                                    </td>
+                                </tr>
+                            `}
+                              )
+                              .join("")}
+                        </tbody>
+                    </table>
+                    
+                    <div style="margin-top: 20px; padding: 10px; background: #333; border-radius: 5px;">
+                        <small><strong>Growth % from Presence:</strong> Shows what percentage of a player's total credit growth in the selected time period came from being present at alliance missions with vehicles.</small>
+                    </div>
+                </body>
+            </html>
+        `)
+  }
+
+  // View all missions
+  function viewAllMissions() {
+    const timeFilter = getTimeFilterBoundaries(currentTimeFilter)
+    const filteredMissions = trackedMissions.filter(mission => {
+      const missionTime = new Date(mission.timestamp).getTime()
+      return timeFilter.start === 0 || (missionTime >= timeFilter.start && missionTime <= timeFilter.end)
+    })
+
+    const popup = window.open("", "missions", "width=1400,height=800,scrollbars=yes")
+    const totalCredits = filteredMissions.reduce((sum, m) => sum + (m.credits || 0), 0)
+
+    popup.document.write(`
+            <html>
+                <head>
+                    <title>Tracked Missions - ${filteredMissions.length} Total (${timeFilter.label})</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 20px; background: #000; color: #fff; }
+                        table { width: 100%; border-collapse: collapse; }
+                        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #555; }
+                        th { background-color: #333; font-weight: bold; position: sticky; top: 0; }
+                        tr:hover { background-color: #222; }
+                        .credits { font-weight: bold; color: #28a745; }
+                        .timestamp { font-size: 0.9em; color: #ccc; }
+                        .shared-by { font-weight: bold; color: #007bff; }
+                        .present-players { font-size: 0.8em; color: #17a2b8; }
+                        .stats { background: #333; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="stats">
+                        <h2>📋 Tracked Missions (${timeFilter.label})</h2>
+                        <p><strong>Filtered Missions:</strong> ${filteredMissions.length}</p>
+                        <p><strong>Total Credits:</strong> ${totalCredits.toLocaleString()}</p>
+                    </div>
+
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Mission</th>
+                                <th>Address</th>
+                                <th>Shared By</th>
+                                <th>Credits</th>
+                                <th>Present Players</th>
+                                <th>Link</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${filteredMissions
+                              .map(
+                                (mission) => `
+                                <tr>
+                                    <td class="timestamp">${new Date(mission.timestamp).toLocaleString()}</td>
+                                    <td><strong>${mission.name}</strong></td>
+                                    <td>${mission.address}</td>
+                                    <td class="shared-by">${mission.sharedBy}</td>
+                                    <td class="credits">${(mission.credits || 0).toLocaleString()}</td>
+                                    <td class="present-players">
+                                        ${mission.presentPlayers && mission.presentPlayers.length > 0 ? 
+                                          `${mission.presentPlayers.length} players: ${mission.presentPlayers.slice(0, 3).join(', ')}${mission.presentPlayers.length > 3 ? '...' : ''}` : 
+                                          'No players present'
+                                        }
+                                    </td>
+                                    <td><a href="${mission.url}" target="_blank">Open</a></td>
+                                </tr>
+                            `,
+                              )
+                              .join("")}
+                        </tbody>
+                    </table>
+                </body>
+            </html>
+        `)
+  }
+
+  // Update processing count display
+  function updateProcessingCount() {
+    const element = document.getElementById("processing-count")
+    if (element) {
+      element.textContent = `${activeRequests} active, ${processingQueue.length} queued`
+    }
+  }
+
+  // Clear all data
+  function clearData() {
+    if (confirm("Are you sure you want to clear all tracked data?")) {
+      trackedMissions = []
+      processedMissionIds.clear()
+      playerProfiles = {}
+      GM.setValue("trackedMissions", "[]")
+      GM.setValue("playerProfiles", "{}")
+      updateUI()
+      showNotification("All data cleared!", "info")
+    }
+  }
+
+  // Update UI
+  function updateUI() {
+    const panel = document.getElementById("mission-tracker-panel")
+    if (panel) {
+      const timeFilter = getTimeFilterBoundaries(currentTimeFilter)
+      const playerStats = calculatePlayerStats(timeFilter)
+      
+      const missionCountEl = document.getElementById("mission-count")
+      const playerCountEl = document.getElementById("player-count")
+      const timeFilterEl = document.getElementById("time-filter-display")
+      
+      if (missionCountEl) missionCountEl.textContent = trackedMissions.length
+      if (playerCountEl) playerCountEl.textContent = Object.keys(playerStats).length
+      if (timeFilterEl) timeFilterEl.textContent = timeFilter.label
+      
+      const topPlayersEl = document.getElementById("top-players")
+      if (topPlayersEl) {
+        const topPlayers = Object.entries(playerStats)
+          .sort(([, a], [, b]) => b.totalCredits - a.totalCredits)
+          .slice(0, 5)
+          
+        topPlayersEl.innerHTML = topPlayers.length > 0
+          ? topPlayers.map(([playerName, stats], index) => `
+              <div style="margin-bottom: 8px; padding: 6px; border-left: 3px solid ${index === 0 ? "#ffd700" : index === 1 ? "#c0c0c0" : index === 2 ? "#cd7f32" : "#007bff"}; background: #444; border-radius: 3px;">
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                      <div>
+                          <div style="font-weight: bold; font-size: 12px; color: #fff;">${index + 1}. ${playerName}</div>
+                          <div style="font-size: 10px; color: #ccc;">
+                              📤 ${stats.missionCount} shared | 🚗 ${stats.missionsPresent || 0} present
+                          </div>
+                      </div>
+                      <div style="text-align: right;">
+                          <div style="font-weight: bold; color: #28a745; font-size: 11px;">
+                              💰 ${stats.totalCredits.toLocaleString()}
+                          </div>
+                          <div style="font-size: 9px; color: #17a2b8;">
+                              Growth: ${stats.growthPercentage || 'N/A'}
+                          </div>
+                      </div>
+                  </div>
+              </div>
+            `).join("")
+          : '<div style="font-size: 11px; color: #ccc; text-align: center;">No player data yet...</div>'
+      }
+    }
   }
 
   // Show notification
@@ -680,393 +1165,25 @@
 
     GM.notification({
       text: message,
-      title: "LSSTracker",
+      title: "Player Statistics Tracker",
       timeout: 4000,
     })
 
-    console.log(`[LSSTracker] ${message}`)
+    console.log(`[Player Statistics Tracker] ${message}`)
   }
 
-  // Save data
-  function saveTrackedMissions() {
-    GM.setValue("lssTrackedMissions", JSON.stringify(trackedMissions))
-  }
-
-  function savePlayerProfiles() {
-    GM.setValue("lssPlayerProfiles", JSON.stringify(playerProfiles))
-  }
-
-  // Toggle UI visibility
-  function toggleUI() {
-    const existingPanel = document.getElementById("lss-tracker-panel")
-    if (existingPanel) {
-      existingPanel.remove()
-    } else {
-      createUI()
-    }
-  }
-
-  // Update UI
-  function updateUI() {
-    const panel = document.getElementById("lss-tracker-panel")
-    if (panel) {
-      panel.remove()
-      createUI()
-    }
-
-    createHUD()
-  }
-
-  // Create main UI panel
-  function createUI() {
-    const panel = document.createElement("div")
-    panel.id = "lss-tracker-panel"
-    panel.className = `lss-tracker-panel ${isMinimized ? 'lss-tracker-minimized' : ''}`
-    
-    const filteredStats = calculateFilteredStats()
-    const { label } = getTimeFilterBoundaries(currentTimeFilter)
-
-    panel.innerHTML = `
-      <div class="lss-tracker-header">
-        <h3 style="margin: 0; color: white;">📊 LSSTracker v2.0</h3>
-        <div>
-          <button id="minimize-panel" class="lss-tracker-button" style="background: none; border: none; font-size: 16px;">
-            ${isMinimized ? '🔼' : '🔽'}
-          </button>
-          <button id="close-panel" class="lss-tracker-button" style="background: none; border: none; font-size: 16px; color: #ff4444;">
-            ✕
-          </button>
-        </div>
-      </div>
-      
-      <div class="lss-tracker-content">
-        <div style="margin-bottom: 15px;">
-          <p><strong>Benutzer:</strong> ${currentUser.userName} (ID: ${currentUser.userId})</p>
-          <p><strong>Status:</strong> <span id="tracking-status">${isTracking ? "🟢 Aktiv" : "🔴 Gestoppt"}</span></p>
-          <p><strong>Missionen:</strong> ${trackedMissions.length} (${Object.keys(filteredStats).length} Spieler aktiv)</p>
-          <p><strong>Warteschlange:</strong> ${processingQueue.length} Missionen</p>
-        </div>
-
-        <div style="margin-bottom: 15px;">
-          <button id="toggle-tracking" class="lss-tracker-button ${isTracking ? 'danger' : 'success'}" style="width: 100%;">
-            ${isTracking ? "⏹️ Stop Tracking" : "▶️ Start Tracking"}
-          </button>
-        </div>
-
-        <div class="lss-tracker-filter">
-          <label><strong>Zeitfilter:</strong></label>
-          <select id="time-filter">
-            <option value="day" ${currentTimeFilter === 'day' ? 'selected' : ''}>Heute</option>
-            <option value="week" ${currentTimeFilter === 'week' ? 'selected' : ''}>Letzte 7 Tage</option>
-            <option value="month" ${currentTimeFilter === 'month' ? 'selected' : ''}>Letzte 30 Tage</option>
-            <option value="lifetime" ${currentTimeFilter === 'lifetime' ? 'selected' : ''}>Gesamtzeit</option>
-          </select>
-        </div>
-
-        <div style="margin: 15px 0;">
-          <button class="lss-tracker-tab active" data-tab="overview">Übersicht</button>
-          <button class="lss-tracker-tab" data-tab="players">Spieler</button>
-          <button class="lss-tracker-tab" data-tab="missions">Missionen</button>
-          <button class="lss-tracker-tab" data-tab="settings">Einstellungen</button>
-        </div>
-
-        <div id="tab-overview" class="lss-tracker-tab-content active">
-          ${createOverviewTab(filteredStats, label)}
-        </div>
-
-        <div id="tab-players" class="lss-tracker-tab-content">
-          ${createPlayersTab(filteredStats)}
-        </div>
-
-        <div id="tab-missions" class="lss-tracker-tab-content">
-          ${createMissionsTab()}
-        </div>
-
-        <div id="tab-settings" class="lss-tracker-tab-content">
-          ${createSettingsTab()}
-        </div>
-      </div>
-    `
-
-    document.body.appendChild(panel)
-    setupEventListeners()
-  }
-
-  // Create overview tab
-  function createOverviewTab(filteredStats, label) {
-    const totalMissions = Object.values(filteredStats).reduce((sum, stats) => sum + stats.missions, 0)
-    const totalSharedCredits = Object.values(filteredStats).reduce((sum, stats) => sum + stats.sharedCredits, 0)
-    const totalVehicleParticipations = Object.values(filteredStats).reduce((sum, stats) => sum + stats.vehicleParticipations, 0)
-
-    return `
-      <h4>📈 Statistiken (${label})</h4>
-      <table class="lss-tracker-table">
-        <tr><td><strong>Aktive Spieler:</strong></td><td>${Object.keys(filteredStats).length}</td></tr>
-        <tr><td><strong>Gesamte Missionen:</strong></td><td>${totalMissions}</td></tr>
-        <tr><td><strong>Geteilte Credits:</strong></td><td>${totalSharedCredits.toLocaleString()}</td></tr>
-        <tr><td><strong>Fahrzeug-Teilnahmen:</strong></td><td>${totalVehicleParticipations}</td></tr>
-        <tr><td><strong>Ø Credits/Mission:</strong></td><td>${totalMissions > 0 ? Math.round(totalSharedCredits / totalMissions).toLocaleString() : 0}</td></tr>
-      </table>
-    `
-  }
-
-  // Create players tab
-  function createPlayersTab(filteredStats) {
-    const sortedPlayers = Object.entries(filteredStats)
-      .map(([playerId, stats]) => ({
-        id: playerId,
-        name: playerProfiles[playerId]?.name || `Player ${playerId}`,
-        totalCredits: playerProfiles[playerId]?.totalCredits || 0,
-        ...stats
-      }))
-      .sort((a, b) => b.sharedCredits - a.sharedCredits)
-
-    let tableRows = ''
-    sortedPlayers.forEach(player => {
-      const sharePercentage = player.totalCredits > 0 
-        ? ((player.sharedCredits / player.totalCredits) * 100).toFixed(1)
-        : '0.0'
-
-      tableRows += `
-        <tr>
-          <td>${player.name}</td>
-          <td>${player.missions}</td>
-          <td>${player.sharedCredits.toLocaleString()}</td>
-          <td>${player.vehicleParticipations}</td>
-          <td>${sharePercentage}%</td>
-        </tr>
-      `
-    })
-
-    return `
-      <h4>👥 Spielerstatistiken</h4>
-      <table class="lss-tracker-table">
-        <thead>
-          <tr>
-            <th>Spieler</th>
-            <th>Missionen</th>
-            <th>Geteilte Credits</th>
-            <th>Fahrzeuge</th>
-            <th>Anteil Karriere</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tableRows || '<tr><td colspan="5">Keine Daten verfügbar</td></tr>'}
-        </tbody>
-      </table>
-    `
-  }
-
-  // Create missions tab
-  function createMissionsTab() {
-    const { start, end } = getTimeFilterBoundaries(currentTimeFilter)
-    const filteredMissions = trackedMissions
-      .filter(m => m.timestamp >= start && m.timestamp <= end)
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .slice(0, 50) // Show last 50 missions
-
-    let tableRows = ''
-    filteredMissions.forEach(mission => {
-      const date = new Date(mission.timestamp).toLocaleDateString('de-DE')
-      const time = new Date(mission.timestamp).toLocaleTimeString('de-DE', { 
-        hour: '2-digit', 
-        minute: '2-digit' 
-      })
-
-      tableRows += `
-        <tr>
-          <td>${date} ${time}</td>
-          <td><a href="${mission.url}" target="_blank">${mission.title}</a></td>
-          <td>${mission.players.length}</td>
-          <td>${mission.sharedCredits.toLocaleString()}</td>
-        </tr>
-      `
-    })
-
-    return `
-      <h4>🎯 Letzte Missionen</h4>
-      <table class="lss-tracker-table">
-        <thead>
-          <tr>
-            <th>Datum/Zeit</th>
-            <th>Mission</th>
-            <th>Spieler</th>
-            <th>Credits</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tableRows || '<tr><td colspan="4">Keine Missionen gefunden</td></tr>'}
-        </tbody>
-      </table>
-    `
-  }
-
-  // Create settings tab
-  function createSettingsTab() {
-    return `
-      <h4>⚙️ Einstellungen</h4>
-      <div style="margin: 10px 0;">
-        <label>
-          <input type="checkbox" id="show-notifications" ${CONFIG.showNotifications ? 'checked' : ''}> 
-          Benachrichtigungen anzeigen
-        </label>
-      </div>
-      <div style="margin: 10px 0;">
-        <label>
-          <input type="checkbox" id="show-hud" ${document.getElementById('lss-tracker-hud') ? 'checked' : ''}> 
-          HUD anzeigen
-        </label>
-      </div>
-      <div style="margin: 15px 0;">
-        <button id="export-data" class="lss-tracker-button">📥 Daten exportieren</button>
-        <button id="clear-data" class="lss-tracker-button danger">🗑️ Daten löschen</button>
-      </div>
-      <div style="margin: 15px 0;">
-        <button id="scan-missions" class="lss-tracker-button">🔍 Missionen scannen</button>
-        <button id="refresh-profiles" class="lss-tracker-button">👤 Profile aktualisieren</button>
-      </div>
-    `
-  }
-
-  // Setup event listeners
-  function setupEventListeners() {
-    // Panel controls
-    document.getElementById("toggle-tracking")?.addEventListener("click", toggleTracking)
-    document.getElementById("close-panel")?.addEventListener("click", () => {
-      document.getElementById("lss-tracker-panel")?.remove()
-    })
-    
-    document.getElementById("minimize-panel")?.addEventListener("click", () => {
-      isMinimized = !isMinimized
-      GM.setValue("lssIsMinimized", isMinimized)
-      updateUI()
-    })
-
-    // Time filter
-    document.getElementById("time-filter")?.addEventListener("change", (e) => {
-      currentTimeFilter = e.target.value
-      GM.setValue("lssCurrentTimeFilter", currentTimeFilter)
-      updateUI()
-    })
-
-    // Tab switching
-    document.querySelectorAll('.lss-tracker-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        const tabName = tab.getAttribute('data-tab')
-        
-        // Update tab buttons
-        document.querySelectorAll('.lss-tracker-tab').forEach(t => t.classList.remove('active'))
-        tab.classList.add('active')
-        
-        // Update tab content
-        document.querySelectorAll('.lss-tracker-tab-content').forEach(content => {
-          content.classList.remove('active')
-        })
-        document.getElementById(`tab-${tabName}`)?.classList.add('active')
-      })
-    })
-
-    // Settings
-    document.getElementById("show-notifications")?.addEventListener("change", (e) => {
-      CONFIG.showNotifications = e.target.checked
-    })
-
-    document.getElementById("show-hud")?.addEventListener("change", (e) => {
-      if (e.target.checked) {
-        createHUD()
-      } else {
-        document.getElementById('lss-tracker-hud')?.remove()
-      }
-    })
-
-    document.getElementById("export-data")?.addEventListener("click", exportData)
-    document.getElementById("clear-data")?.addEventListener("click", clearData)
-    document.getElementById("scan-missions")?.addEventListener("click", scanForMissions)
-    document.getElementById("refresh-profiles")?.addEventListener("click", refreshProfiles)
-  }
-
-  // Export data
-  function exportData() {
-    const data = {
-      missions: trackedMissions,
-      profiles: playerProfiles,
-      stats: playerStats,
-      exportDate: new Date().toISOString(),
-      version: "2.0"
-    }
-
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    
-    GM.download(url, `lsstracker-export-${Date.now()}.json`, url)
-    showNotification("Daten exportiert!", "success")
-  }
-
-  // Clear data
-  function clearData() {
-    if (confirm("Alle Daten löschen? Diese Aktion kann nicht rückgängig gemacht werden!")) {
-      trackedMissions = []
-      processedMissionIds.clear()
-      playerProfiles = {}
-      playerStats = {}
-      
-      GM.setValue("lssTrackedMissions", "[]")
-      GM.setValue("lssPlayerProfiles", "{}")
-      GM.setValue("lssPlayerStats", "{}")
-      
-      updateUI()
-      showNotification("Alle Daten gelöscht!", "info")
-    }
-  }
-
-  // Refresh profiles
-  async function refreshProfiles() {
-    showNotification("Profile werden aktualisiert...", "info")
-    
-    const playerIds = Object.keys(playerStats)
-    for (const playerId of playerIds) {
-      delete playerProfiles[playerId] // Force refresh
-      await fetchPlayerProfile(playerId)
-      await new Promise(resolve => setTimeout(resolve, 1000)) // Rate limiting
-    }
-    
-    updateUI()
-    showNotification("Profile aktualisiert!", "success")
-  }
-
-  // Start tracking loop
-  function startTracking() {
-    if (!isTracking || !verifyUserProfile()) return
-
-    scanForMissions()
-
-    setTimeout(() => {
-      if (isTracking) {
-        lastCheck = Date.now()
-        GM.setValue("lssLastCheck", lastCheck)
-        startTracking()
-      }
-    }, CONFIG.checkInterval)
-  }
-
-  // Initialize
+  // Initialize when page loads
   function init() {
     if (!verifyUserProfile()) return
 
-    // Add navbar button on main pages
-    if (window.location.pathname === "/" || 
-        window.location.pathname === "" || 
-        window.location.pathname.includes('/missions')) {
+    if (window.location.pathname === "/" || window.location.pathname === "") {
       addNavbarButton()
-      
+
       if (isTracking) {
         startTracking()
       }
 
-      // Create HUD if enabled
-      createHUD()
-
-      showNotification(`LSSTracker v2.0 bereit für ${currentUser.userName}`, "info")
+      showNotification(`Player Statistics Tracker loaded for ${currentUser.userName}!`, "info")
     }
   }
 
@@ -1074,8 +1191,8 @@
   setInterval(() => {
     if (!verifyUserProfile()) {
       isTracking = false
-      GM.setValue("lssIsTracking", false)
-      const panel = document.getElementById("lss-tracker-panel")
+      GM.setValue("isTracking", false)
+      const panel = document.getElementById("mission-tracker-panel")
       if (panel) panel.remove()
       
       GM.notification({
@@ -1090,6 +1207,6 @@
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init)
   } else {
-    setTimeout(init, 1000)
+    init()
   }
 })()
