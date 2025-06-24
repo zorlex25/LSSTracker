@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LSSTracker Loader
-// @version      1.1
-// @description  LSSTracker loader with profile verification and user authentication (Fixed)
+// @version      1.2
+// @description  LSSTracker loader
 // @author       zorlex25
 // @match        *://www.leitstellenspiel.de/*
 // @grant        GM_xmlhttpRequest
