@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         Leitstellenspiel Player Statistics Tracker
+// @name         LSSTracker - Player Statistics Tracker
 // @namespace    http://tampermonkey.net/
-// @version      4.3
-// @description  Track player statistics - missions shared, vehicle presence, and growth analysis
-// @author       You
+// @version      1.0
+// @description  Track player statistics with profile verification
+// @author       zorlex25
 // @match        https://www.leitstellenspiel.de/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -13,6 +13,28 @@
 // ==/UserScript==
 
 ;(() => {
+  // Security check - only run if loaded by authorized loader
+  if (!window.lssTrackerAllowedUsers || !window.lssTrackerUserData) {
+    console.error("LSSTracker: Unauthorized access attempt")
+    return
+  }
+
+  const currentUser = window.lssTrackerUserData
+  const allowedUsers = window.lssTrackerAllowedUsers
+
+  // Verify current user is still in allowed list
+  if (!allowedUsers.includes(currentUser.userId)) {
+    console.error("LSSTracker: User not authorized")
+    return
+  }
+
+  // Show welcome message
+  GM_notification({
+    text: `Willkommen ${currentUser.userName}! LSSTracker ist aktiv.`,
+    title: "LSSTracker",
+    timeout: 3000,
+  })
+
   // Configuration
   const CONFIG = {
     checkInterval: 30000,
@@ -22,40 +44,58 @@
   }
 
   // Mission storage
-  let trackedMissions = JSON.parse(window.GM_getValue("trackedMissions", "[]"))
+  let trackedMissions = JSON.parse(window.GM_getValue("lssTrackedMissions", "[]"))
   let processedMissionIds = new Set(trackedMissions.map(m => m.id))
-  let playerProfiles = JSON.parse(window.GM_getValue("playerProfiles", "{}")) // Cache player profile data with history
-  let isTracking = window.GM_getValue("isTracking", false)
-  let lastCheck = window.GM_getValue("lastCheck", 0)
-  let isMinimized = window.GM_getValue("isMinimized", false)
-  let currentTimeFilter = window.GM_getValue("currentTimeFilter", "week") // day, week, month, lifetime
+  let playerProfiles = JSON.parse(window.GM_getValue("lssPlayerProfiles", "{}"))
+  let isTracking = window.GM_getValue("lssIsTracking", false)
+  let lastCheck = window.GM_getValue("lssLastCheck", 0)
+  let isMinimized = window.GM_getValue("lssIsMinimized", false)
+  let currentTimeFilter = window.GM_getValue("lssCurrentTimeFilter", "week")
   const processingQueue = []
   let activeRequests = 0
 
-  // Add button to navbar
-  function addNavbarButton() {
-    const navbar = document.querySelector('.nav.navbar-nav.navbar-right')
-    if (navbar && !document.getElementById('player-stats-btn')) {
-      const li = document.createElement('li')
-      li.innerHTML = `
-        <a href="#" id="player-stats-btn" title="Player Statistics Tracker">
-          <img class="navbar-icon" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJ3aGl0ZSI+PHBhdGggZD0iTTMgM3YxOGgxOFYzSDN6bTIgMmgxNHYxNEg1VjV6bTIgMmg0djJIN3ptMCA0aDR2Mkg3em0wIDRoNHYySDd6Ii8+PC9zdmc+" width="24" height="24">
-          <span class="visible-xs">Stats</span>
-        </a>
-      `
-      
-      const helpMenu = document.getElementById('help_menu')
-      if (helpMenu) {
-        navbar.insertBefore(li, helpMenu)
-      } else {
-        navbar.appendChild(li)
-      }
-      
-      document.getElementById('player-stats-btn').addEventListener('click', (e) => {
-        e.preventDefault()
-        toggleUI()
+  // Enhanced profile verification
+  function verifyUserProfile() {
+    const profileData = getCurrentUserData()
+    
+    if (!profileData.userId || profileData.userId !== currentUser.userId) {
+      GM_notification({
+        text: "Profil-Verifikation fehlgeschlagen! Script wird gestoppt.",
+        title: "LSSTracker - Sicherheitswarnung",
+        timeout: 5000,
       })
+      return false
     }
+    
+    return true
+  }
+
+  // Get current user data (same as in loader)
+  function getCurrentUserData() {
+    let userId = null
+    let userName = null
+
+    const profileLink = document.querySelector('a[href^="/profile/"]')
+    if (profileLink) {
+      const match = profileLink.href.match(/\/profile\/(\d+)/)
+      if (match) {
+        userId = Number.parseInt(match[1])
+        userName = profileLink.textContent.trim()
+      }
+    }
+
+    if (!userId) {
+      const navbarProfile = document.querySelector('#navbar_profile_link')
+      if (navbarProfile) {
+        const match = navbarProfile.href.match(/\/profile\/(\d+)/)
+        if (match) {
+          userId = Number.parseInt(match[1])
+          userName = navbarProfile.textContent.trim()
+        }
+      }
+    }
+
+    return { userId, userName }
   }
 
   // Get time filter boundaries
@@ -68,7 +108,7 @@
         return {
           start: today.getTime(),
           end: now.getTime(),
-          label: 'Today'
+          label: 'Heute'
         }
       case 'week':
         const weekStart = new Date(today)
@@ -76,7 +116,7 @@
         return {
           start: weekStart.getTime(),
           end: now.getTime(),
-          label: 'Last 7 Days'
+          label: 'Letzte 7 Tage'
         }
       case 'month':
         const monthStart = new Date(today)
@@ -84,21 +124,51 @@
         return {
           start: monthStart.getTime(),
           end: now.getTime(),
-          label: 'Last 30 Days'
+          label: 'Letzte 30 Tage'
         }
       case 'lifetime':
       default:
         return {
           start: 0,
           end: now.getTime(),
-          label: 'All Time'
+          label: 'Gesamtzeit'
         }
+    }
+  }
+
+  // Add button to navbar with user verification
+  function addNavbarButton() {
+    if (!verifyUserProfile()) return
+
+    const navbar = document.querySelector('.nav.navbar-nav.navbar-right')
+    if (navbar && !document.getElementById('lss-tracker-btn')) {
+      const li = document.createElement('li')
+      li.innerHTML = `
+        <a href="#" id="lss-tracker-btn" title="LSSTracker - Player Statistics">
+          <img class="navbar-icon" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJ3aGl0ZSI+PHBhdGggZD0iTTMgM3YxOGgxOFYzSDN6bTIgMmgxNHYxNEg1VjV6bTIgMmg0djJIN3ptMCA0aDR2Mkg3em0wIDRoNHYySDd6Ii8+PC9zdmc+" width="24" height="24">
+          <span class="visible-xs">LSSTracker</span>
+        </a>
+      `
+      
+      const helpMenu = document.getElementById('help_menu')
+      if (helpMenu) {
+        navbar.insertBefore(li, helpMenu)
+      } else {
+        navbar.appendChild(li)
+      }
+      
+      document.getElementById('lss-tracker-btn').addEventListener('click', (e) => {
+        e.preventDefault()
+        if (verifyUserProfile()) {
+          toggleUI()
+        }
+      })
     }
   }
 
   // Toggle UI visibility
   function toggleUI() {
-    const existingPanel = document.getElementById("mission-tracker-panel")
+    const existingPanel = document.getElementById("lss-tracker-panel")
     if (existingPanel) {
       existingPanel.remove()
     } else {
@@ -115,7 +185,7 @@
       .slice(0, 5)
 
     const panel = document.createElement("div")
-    panel.id = "mission-tracker-panel"
+    panel.id = "lss-tracker-panel"
     panel.innerHTML = `
             <div style="
                 position: fixed;
@@ -134,8 +204,9 @@
                 ${isMinimized ? "height: 50px; overflow: hidden;" : ""}
             ">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                    <h3 style="margin: 0; color: #007bff;">📊 Player Statistics Tracker</h3>
+                    <h3 style="margin: 0; color: #007bff;">📊 LSSTracker</h3>
                     <div>
+                        <span style="font-size: 10px; color: #ccc; margin-right: 10px;">User: ${currentUser.userName}</span>
                         <button id="minimize-panel" style="
                             background: none;
                             border: none;
@@ -181,33 +252,33 @@
                     <div style="background: #333; color: #fff; padding: 10px; border-radius: 4px; margin-bottom: 15px;">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                             <span><strong>Status:</strong></span>
-                            <span id="tracking-status">${isTracking ? "🟢 Active" : "🔴 Stopped"}</span>
+                            <span id="tracking-status">${isTracking ? "🟢 Aktiv" : "🔴 Gestoppt"}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-                            <span><strong>Time Filter:</strong></span>
+                            <span><strong>Zeitfilter:</strong></span>
                             <span id="time-filter-display">${timeFilter.label}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-                            <span><strong>Total Missions:</strong></span>
+                            <span><strong>Einsätze gesamt:</strong></span>
                             <span id="mission-count">${trackedMissions.length}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-                            <span><strong>Active Players:</strong></span>
+                            <span><strong>Aktive Spieler:</strong></span>
                             <span id="player-count">${Object.keys(playerStats).length}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-                            <span><strong>Processing:</strong></span>
+                            <span><strong>Verarbeitung:</strong></span>
                             <span id="processing-count">0</span>
                         </div>
                         <div style="display: flex; justify-content: space-between;">
-                            <span><strong>Last Check:</strong></span>
-                            <span id="last-check">${lastCheck ? new Date(lastCheck).toLocaleTimeString() : "Never"}</span>
+                            <span><strong>Letzte Prüfung:</strong></span>
+                            <span id="last-check">${lastCheck ? new Date(lastCheck).toLocaleTimeString() : "Nie"}</span>
                         </div>
                     </div>
 
                     <div style="margin-bottom: 15px;">
                         <div style="margin-bottom: 10px;">
-                            <strong>📅 Time Filter:</strong>
+                            <strong>📅 Zeitfilter:</strong>
                         </div>
                         <div style="display: flex; gap: 5px; flex-wrap: wrap;">
                             <button id="filter-day" style="
@@ -218,7 +289,7 @@
                                 border-radius: 4px;
                                 cursor: pointer;
                                 font-size: 11px;
-                            ">Today</button>
+                            ">Heute</button>
                             <button id="filter-week" style="
                                 background: ${currentTimeFilter === 'week' ? '#007bff' : '#6c757d'};
                                 color: white;
@@ -227,7 +298,7 @@
                                 border-radius: 4px;
                                 cursor: pointer;
                                 font-size: 11px;
-                            ">7 Days</button>
+                            ">7 Tage</button>
                             <button id="filter-month" style="
                                 background: ${currentTimeFilter === 'month' ? '#007bff' : '#6c757d'};
                                 color: white;
@@ -236,7 +307,7 @@
                                 border-radius: 4px;
                                 cursor: pointer;
                                 font-size: 11px;
-                            ">30 Days</button>
+                            ">30 Tage</button>
                             <button id="filter-lifetime" style="
                                 background: ${currentTimeFilter === 'lifetime' ? '#007bff' : '#6c757d'};
                                 color: white;
@@ -245,7 +316,7 @@
                                 border-radius: 4px;
                                 cursor: pointer;
                                 font-size: 11px;
-                            ">All Time</button>
+                            ">Gesamt</button>
                         </div>
                     </div>
 
@@ -258,7 +329,7 @@
                             border-radius: 4px;
                             cursor: pointer;
                             margin-right: 8px;
-                        ">👁️ View All Players</button>
+                        ">👁️ Alle Spieler</button>
 
                         <button id="view-missions" style="
                             background: #6f42c1;
@@ -268,7 +339,7 @@
                             border-radius: 4px;
                             cursor: pointer;
                             margin-right: 8px;
-                        ">📋 View Missions</button>
+                        ">📋 Einsätze</button>
 
                         <button id="clear-data" style="
                             background: #ffc107;
@@ -277,11 +348,11 @@
                             padding: 8px 12px;
                             border-radius: 4px;
                             cursor: pointer;
-                        ">🗑️ Clear</button>
+                        ">🗑️ Löschen</button>
                     </div>
 
                     <div style="margin-bottom: 10px;">
-                        <strong>🏆 Top Players (${timeFilter.label}):</strong>
+                        <strong>🏆 Top Spieler (${timeFilter.label}):</strong>
                     </div>
 
                     <div id="top-players" style="
@@ -302,7 +373,7 @@
                                     <div>
                                         <div style="font-weight: bold; font-size: 12px; color: #fff;">${index + 1}. ${playerName}</div>
                                         <div style="font-size: 10px; color: #ccc;">
-                                            📤 ${stats.missionCount} shared | 🚗 ${stats.missionsPresent || 0} present
+                                            📤 ${stats.missionCount} geteilt | 🚗 ${stats.missionsPresent || 0} anwesend
                                         </div>
                                     </div>
                                     <div style="text-align: right;">
@@ -310,7 +381,7 @@
                                             💰 ${stats.totalCredits.toLocaleString()}
                                         </div>
                                         <div style="font-size: 9px; color: #17a2b8;">
-                                            Growth: ${stats.growthPercentage || 'N/A'}
+                                            Wachstum: ${stats.growthPercentage || 'N/A'}
                                         </div>
                                     </div>
                                 </div>
@@ -318,7 +389,7 @@
                         `,
                                 )
                                 .join("")
-                            : '<div style="font-size: 11px; color: #ccc; text-align: center;">No player data yet...</div>'
+                            : '<div style="font-size: 11px; color: #ccc; text-align: center;">Noch keine Spielerdaten...</div>'
                         }
                     </div>
                 </div>
@@ -340,8 +411,8 @@
       if (!inTimeRange && timeFilter.start > 0) return // Skip if outside time range (except for lifetime)
 
       // Track mission sharing
-      const sharedBy = mission.sharedBy || "Unknown Member"
-      if (sharedBy !== "Unknown Member") {
+      const sharedBy = mission.sharedBy || "Unbekanntes Mitglied"
+      if (sharedBy !== "Unbekanntes Mitglied") {
         if (!stats[sharedBy]) {
           stats[sharedBy] = {
             missionCount: 0,
@@ -466,15 +537,15 @@
               }
             }
 
-            window.GM_setValue("playerProfiles", JSON.stringify(playerProfiles))
-            console.log(`Updated profile for ${playerName}: ${totalEarnings.toLocaleString()} total credits`)
+            window.GM_setValue("lssPlayerProfiles", JSON.stringify(playerProfiles))
+            console.log(`Profil aktualisiert für ${playerName}: ${totalEarnings.toLocaleString()} Credits gesamt`)
           }
         } catch (error) {
-          console.error(`Error parsing profile for ${playerName}:`, error)
+          console.error(`Fehler beim Parsen des Profils für ${playerName}:`, error)
         }
       },
       onerror: (error) => {
-        console.error(`Error fetching profile for ${playerName}:`, error)
+        console.error(`Fehler beim Laden des Profils für ${playerName}:`, error)
       },
     })
   }
@@ -510,7 +581,7 @@
     document.getElementById("view-missions").addEventListener("click", viewAllMissions)
     document.getElementById("minimize-panel").addEventListener("click", toggleMinimize)
     document.getElementById("close-panel").addEventListener("click", () => {
-      document.getElementById("mission-tracker-panel").remove()
+      document.getElementById("lss-tracker-panel").remove()
     })
 
     // Time filter buttons
@@ -523,10 +594,10 @@
   // Set time filter
   function setTimeFilter(filter) {
     currentTimeFilter = filter
-    window.GM_setValue("currentTimeFilter", filter)
+    window.GM_setValue("lssCurrentTimeFilter", filter)
     
     // Recreate UI with new filter
-    const existingPanel = document.getElementById("mission-tracker-panel")
+    const existingPanel = document.getElementById("lss-tracker-panel")
     if (existingPanel) {
       existingPanel.remove()
       createUI()
@@ -536,9 +607,9 @@
   // Toggle minimize
   function toggleMinimize() {
     isMinimized = !isMinimized
-    window.GM_setValue("isMinimized", isMinimized)
+    window.GM_setValue("lssIsMinimized", isMinimized)
 
-    const panel = document.getElementById("mission-tracker-panel")
+    const panel = document.getElementById("lss-tracker-panel")
     const content = document.getElementById("panel-content")
     const button = document.getElementById("minimize-panel")
 
@@ -557,8 +628,10 @@
 
   // Toggle tracking
   function toggleTracking() {
+    if (!verifyUserProfile()) return
+
     isTracking = !isTracking
-    window.GM_setValue("isTracking", isTracking)
+    window.GM_setValue("lssIsTracking", isTracking)
 
     const button = document.getElementById("toggle-tracking")
     const status = document.getElementById("tracking-status")
@@ -566,20 +639,20 @@
     if (isTracking) {
       button.textContent = "⏹️ Stop Tracking"
       button.style.background = "#dc3545"
-      status.textContent = "🟢 Active"
+      status.textContent = "🟢 Aktiv"
       startTracking()
-      showNotification("Player statistics tracking started!", "success")
+      showNotification("Spielerstatistik-Tracking gestartet!", "success")
     } else {
       button.textContent = "▶️ Start Tracking"
       button.style.background = "#28a745"
-      status.textContent = "🔴 Stopped"
-      showNotification("Player statistics tracking stopped!", "info")
+      status.textContent = "🔴 Gestoppt"
+      showNotification("Spielerstatistik-Tracking gestoppt!", "info")
     }
   }
 
   // Start tracking missions
   function startTracking() {
-    if (!isTracking) return
+    if (!isTracking || !verifyUserProfile()) return
 
     checkMissions()
     setTimeout(startTracking, CONFIG.checkInterval)
@@ -603,18 +676,18 @@
       })
 
       if (newMissionsFound > 0) {
-        showNotification(`Found ${newMissionsFound} new mission(s)! Processing...`, "info")
+        showNotification(`${newMissionsFound} neue(r) Einsatz/Einsätze gefunden! Verarbeitung...`, "info")
         processQueue()
       }
 
       lastCheck = Date.now()
-      window.GM_setValue("lastCheck", lastCheck)
+      window.GM_setValue("lssLastCheck", lastCheck)
       const lastCheckElement = document.getElementById("last-check")
       if (lastCheckElement) {
         lastCheckElement.textContent = new Date(lastCheck).toLocaleTimeString()
       }
     } catch (error) {
-      console.error("Error checking missions:", error)
+      console.error("Fehler beim Prüfen der Einsätze:", error)
     }
   }
 
@@ -645,24 +718,24 @@
           extractAndFetchPlayerProfiles(response.responseText)
           
           const missionData = parseDetailedMissionData(response.responseText, missionId, basicData)
-          if (missionData && missionData.sharedBy !== "Unknown Member") {
+          if (missionData && missionData.sharedBy !== "Unbekanntes Mitglied") {
             trackedMissions.unshift(missionData)
 
             if (trackedMissions.length > CONFIG.maxMissions) {
               trackedMissions = trackedMissions.slice(0, CONFIG.maxMissions)
             }
 
-            window.GM_setValue("trackedMissions", JSON.stringify(trackedMissions))
+            window.GM_setValue("lssTrackedMissions", JSON.stringify(trackedMissions))
             updateUI()
             
             const presentCount = missionData.presentPlayers ? missionData.presentPlayers.length : 0
             showNotification(
-              `✅ ${missionData.sharedBy}: ${missionData.credits.toLocaleString()} credits | ${presentCount} players present`, 
+              `✅ ${missionData.sharedBy}: ${missionData.credits.toLocaleString()} Credits | ${presentCount} Spieler anwesend`, 
               "success"
             )
           }
         } catch (error) {
-          console.error("Error parsing mission data:", error)
+          console.error("Fehler beim Parsen der Einsatzdaten:", error)
         }
 
         activeRequests--
@@ -670,7 +743,7 @@
         processQueue()
       },
       onerror: (error) => {
-        console.error("Error fetching mission details:", error)
+        console.error("Fehler beim Laden der Einsatzdetails:", error)
         activeRequests--
         updateProcessingCount()
         processQueue()
@@ -684,8 +757,8 @@
       const element = document.getElementById(`mission_${missionId}`)
       if (!element) return {}
 
-      let name = "Unknown Mission"
-      let address = "Unknown Address"
+      let name = "Unbekannter Einsatz"
+      let address = "Unbekannte Adresse"
 
       try {
         const nameElement = element.querySelector(`#mission_caption_${missionId}`)
@@ -710,7 +783,7 @@
       const doc = parser.parseFromString(html, "text/html")
 
       // Extract shared by from alert div
-      let sharedBy = "Unknown Member"
+      let sharedBy = "Unbekanntes Mitglied"
       const alertDivs = doc.querySelectorAll(".alert.alert-info")
       for (const div of alertDivs) {
         const text = div.textContent
@@ -751,8 +824,8 @@
 
       return {
         id: missionId,
-        name: basicData.name || "Unknown Mission",
-        address: basicData.address || "Unknown Address",
+        name: basicData.name || "Unbekannter Einsatz",
+        address: basicData.address || "Unbekannte Adresse",
         sharedBy: sharedBy,
         credits: credits,
         presentPlayers: Array.from(presentPlayers),
@@ -760,7 +833,7 @@
         url: `https://www.leitstellenspiel.de/missions/${missionId}`,
       }
     } catch (error) {
-      console.error("Error parsing detailed mission data:", error)
+      console.error("Fehler beim Parsen der detaillierten Einsatzdaten:", error)
       return null
     }
   }
@@ -798,15 +871,15 @@
           const mission = trackedMissions.find((m) => m.id === missionId)
           if (mission) {
             mission.credits = credits
-            window.GM_setValue("trackedMissions", JSON.stringify(trackedMissions))
+            window.GM_setValue("lssTrackedMissions", JSON.stringify(trackedMissions))
             updateUI()
           }
         } catch (error) {
-          console.error("Error parsing credits:", error)
+          console.error("Fehler beim Parsen der Credits:", error)
         }
       },
       onerror: () => {
-        console.log("Failed to fetch credits for mission", missionId)
+        console.log("Fehler beim Laden der Credits für Einsatz", missionId)
       },
     })
   }
@@ -820,18 +893,18 @@
     )
 
     if (players.length === 0) {
-      showNotification("No player statistics to export!", "warning")
+      showNotification("Keine Spielerstatistiken zum Exportieren!", "warning")
       return
     }
 
     try {
       const headers = [
-        "Player Name",
-        "Missions Shared",
-        "Missions Present", 
+        "Spielername",
+        "Einsätze geteilt",
+        "Einsätze anwesend", 
         "Share Credits",
-        "Presence Credits",
-        "Growth % from Presence",
+        "Anwesenheits Credits",
+        "Wachstum % durch Anwesenheit",
       ]
 
       const csvRows = [headers.join(",")]
@@ -849,7 +922,7 @@
       })
 
       const csvContent = csvRows.join("\n")
-      const filename = `leitstellenspiel_player_stats_${currentTimeFilter}_${new Date().toISOString().split("T")[0]}.csv`
+      const filename = `lss_tracker_spieler_stats_${currentTimeFilter}_${new Date().toISOString().split("T")[0]}.csv`
 
       const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" })
       const url = URL.createObjectURL(blob)
@@ -863,10 +936,10 @@
       document.body.removeChild(link)
       URL.revokeObjectURL(url)
 
-      showNotification(`✅ Exported ${timeFilter.label} statistics for ${players.length} players!`, "success")
+      showNotification(`✅ ${timeFilter.label} Statistiken für ${players.length} Spieler exportiert!`, "success")
     } catch (error) {
-      console.error("CSV Export Error:", error)
-      showNotification("❌ CSV export failed! Check console for details.", "error")
+      console.error("CSV Export Fehler:", error)
+      showNotification("❌ CSV Export fehlgeschlagen! Siehe Konsole für Details.", "error")
     }
   }
 
@@ -882,7 +955,7 @@
     popup.document.write(`
             <html>
                 <head>
-                    <title>Player Statistics - ${players.length} Players (${timeFilter.label})</title>
+                    <title>Spielerstatistiken - ${players.length} Spieler (${timeFilter.label})</title>
                     <style>
                         body { font-family: Arial, sans-serif; padding: 20px; background: #000; color: #fff; }
                         table { width: 100%; border-collapse: collapse; }
@@ -901,22 +974,23 @@
                 </head>
                 <body>
                     <div class="stats">
-                        <h2>🏆 Player Statistics (${timeFilter.label})</h2>
-                        <p><strong>Total Players:</strong> ${players.length}</p>
-                        <p><strong>Total Missions:</strong> ${trackedMissions.length}</p>
-                        <p><strong>Time Period:</strong> ${timeFilter.label}</p>
+                        <h2>🏆 Spielerstatistiken (${timeFilter.label})</h2>
+                        <p><strong>Spieler gesamt:</strong> ${players.length}</p>
+                        <p><strong>Einsätze gesamt:</strong> ${trackedMissions.length}</p>
+                        <p><strong>Zeitraum:</strong> ${timeFilter.label}</p>
+                        <p><strong>Benutzer:</strong> ${currentUser.userName} (ID: ${currentUser.userId})</p>
                     </div>
 
                     <table id="playerTable">
                         <thead>
                             <tr>
-                                <th>Rank</th>
-                                <th>Player Name</th>
-                                <th>Missions Shared</th>
-                                <th>Missions Present</th>
+                                <th>Rang</th>
+                                <th>Spielername</th>
+                                <th>Einsätze geteilt</th>
+                                <th>Einsätze anwesend</th>
                                 <th>Share Credits</th>
-                                <th>Presence Credits</th>
-                                <th>Growth % from Presence</th>
+                                <th>Anwesenheits Credits</th>
+                                <th>Wachstum % durch Anwesenheit</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -942,7 +1016,7 @@
                     </table>
                     
                     <div style="margin-top: 20px; padding: 10px; background: #333; border-radius: 5px;">
-                        <small><strong>Growth % from Presence:</strong> Shows what percentage of a player's total credit growth in the selected time period came from being present at alliance missions with vehicles.</small>
+                        <small><strong>Wachstum % durch Anwesenheit:</strong> Zeigt, welcher Prozentsatz des gesamten Credit-Wachstums eines Spielers im ausgewählten Zeitraum durch die Anwesenheit bei Verbandseinsätzen mit Fahrzeugen entstanden ist.</small>
                     </div>
                 </body>
             </html>
@@ -963,7 +1037,7 @@
     popup.document.write(`
             <html>
                 <head>
-                    <title>Tracked Missions - ${filteredMissions.length} Total (${timeFilter.label})</title>
+                    <title>Verfolgte Einsätze - ${filteredMissions.length} Gesamt (${timeFilter.label})</title>
                     <style>
                         body { font-family: Arial, sans-serif; padding: 20px; background: #000; color: #fff; }
                         table { width: 100%; border-collapse: collapse; }
@@ -979,20 +1053,21 @@
                 </head>
                 <body>
                     <div class="stats">
-                        <h2>📋 Tracked Missions (${timeFilter.label})</h2>
-                        <p><strong>Filtered Missions:</strong> ${filteredMissions.length}</p>
-                        <p><strong>Total Credits:</strong> ${totalCredits.toLocaleString()}</p>
+                        <h2>📋 Verfolgte Einsätze (${timeFilter.label})</h2>
+                        <p><strong>Gefilterte Einsätze:</strong> ${filteredMissions.length}</p>
+                        <p><strong>Credits gesamt:</strong> ${totalCredits.toLocaleString()}</p>
+                        <p><strong>Benutzer:</strong> ${currentUser.userName} (ID: ${currentUser.userId})</p>
                     </div>
 
                     <table>
                         <thead>
                             <tr>
-                                <th>Time</th>
-                                <th>Mission</th>
-                                <th>Address</th>
-                                <th>Shared By</th>
+                                <th>Zeit</th>
+                                <th>Einsatz</th>
+                                <th>Adresse</th>
+                                <th>Geteilt von</th>
                                 <th>Credits</th>
-                                <th>Present Players</th>
+                                <th>Anwesende Spieler</th>
                                 <th>Link</th>
                             </tr>
                         </thead>
@@ -1008,11 +1083,11 @@
                                     <td class="credits">${(mission.credits || 0).toLocaleString()}</td>
                                     <td class="present-players">
                                         ${mission.presentPlayers && mission.presentPlayers.length > 0 ? 
-                                          `${mission.presentPlayers.length} players: ${mission.presentPlayers.slice(0, 3).join(', ')}${mission.presentPlayers.length > 3 ? '...' : ''}` : 
-                                          'No players present'
+                                          `${mission.presentPlayers.length} Spieler: ${mission.presentPlayers.slice(0, 3).join(', ')}${mission.presentPlayers.length > 3 ? '...' : ''}` : 
+                                          'Keine Spieler anwesend'
                                         }
                                     </td>
-                                    <td><a href="${mission.url}" target="_blank">Open</a></td>
+                                    <td><a href="${mission.url}" target="_blank">Öffnen</a></td>
                                 </tr>
                             `,
                               )
@@ -1028,26 +1103,26 @@
   function updateProcessingCount() {
     const element = document.getElementById("processing-count")
     if (element) {
-      element.textContent = `${activeRequests} active, ${processingQueue.length} queued`
+      element.textContent = `${activeRequests} aktiv, ${processingQueue.length} in Warteschlange`
     }
   }
 
   // Clear all data
   function clearData() {
-    if (confirm("Are you sure you want to clear all tracked data?")) {
+    if (confirm("Sind Sie sicher, dass Sie alle verfolgten Daten löschen möchten?")) {
       trackedMissions = []
       processedMissionIds.clear()
       playerProfiles = {}
-      window.GM_setValue("trackedMissions", "[]")
-      window.GM_setValue("playerProfiles", "{}")
+      window.GM_setValue("lssTrackedMissions", "[]")
+      window.GM_setValue("lssPlayerProfiles", "{}")
       updateUI()
-      showNotification("All data cleared!", "info")
+      showNotification("Alle Daten gelöscht!", "info")
     }
   }
 
   // Update UI
   function updateUI() {
-    const panel = document.getElementById("mission-tracker-panel")
+    const panel = document.getElementById("lss-tracker-panel")
     if (panel) {
       const timeFilter = getTimeFilterBoundaries(currentTimeFilter)
       const playerStats = calculatePlayerStats(timeFilter)
@@ -1073,7 +1148,7 @@
                       <div>
                           <div style="font-weight: bold; font-size: 12px; color: #fff;">${index + 1}. ${playerName}</div>
                           <div style="font-size: 10px; color: #ccc;">
-                              📤 ${stats.missionCount} shared | 🚗 ${stats.missionsPresent || 0} present
+                              📤 ${stats.missionCount} geteilt | 🚗 ${stats.missionsPresent || 0} anwesend
                           </div>
                       </div>
                       <div style="text-align: right;">
@@ -1081,13 +1156,13 @@
                               💰 ${stats.totalCredits.toLocaleString()}
                           </div>
                           <div style="font-size: 9px; color: #17a2b8;">
-                              Growth: ${stats.growthPercentage || 'N/A'}
+                              Wachstum: ${stats.growthPercentage || 'N/A'}
                           </div>
                       </div>
                   </div>
               </div>
             `).join("")
-          : '<div style="font-size: 11px; color: #ccc; text-align: center;">No player data yet...</div>'
+          : '<div style="font-size: 11px; color: #ccc; text-align: center;">Noch keine Spielerdaten...</div>'
       }
     }
   }
@@ -1096,17 +1171,19 @@
   function showNotification(message, type = "info") {
     if (!CONFIG.showNotifications) return
 
-    window.GM_notification({
+    GM_notification({
       text: message,
-      title: "Player Statistics Tracker",
+      title: "LSSTracker",
       timeout: 4000,
     })
 
-    console.log(`[Player Statistics Tracker] ${message}`)
+    console.log(`[LSSTracker] ${message}`)
   }
 
-  // Initialize when page loads
+  // Initialize with security checks
   function init() {
+    if (!verifyUserProfile()) return
+
     if (window.location.pathname === "/" || window.location.pathname === "") {
       addNavbarButton()
 
@@ -1114,9 +1191,25 @@
         startTracking()
       }
 
-      showNotification("Player Statistics Tracker loaded!", "info")
+      showNotification(`LSSTracker bereit für ${currentUser.userName}`, "info")
     }
   }
+
+  // Periodic security check
+  setInterval(() => {
+    if (!verifyUserProfile()) {
+      isTracking = false
+      window.GM_setValue("lssIsTracking", false)
+      const panel = document.getElementById("lss-tracker-panel")
+      if (panel) panel.remove()
+      
+      GM_notification({
+        text: "Sicherheitsprüfung fehlgeschlagen - Tracking gestoppt",
+        title: "LSSTracker - Sicherheit",
+        timeout: 5000,
+      })
+    }
+  }, 60000) // Check every minute
 
   // Wait for page to load
   if (document.readyState === "loading") {
