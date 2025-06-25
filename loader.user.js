@@ -1,3 +1,21 @@
+// ==UserScript==
+// @name         LSSTracker Loader (Fixed)
+// @version      1.1
+// @description  LSSTracker loader with profile verification and user authentication (Fixed)
+// @author       zorlex25
+// @match        *://www.leitstellenspiel.de/*
+// @grant        GM_xmlhttpRequest
+// @grant        GM_addStyle
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_deleteValue
+// @grant        GM_notification
+// @require      https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js
+// @require      https://code.jquery.com/jquery-3.6.0.min.js
+// @updateURL    https://raw.githubusercontent.com/zorlex25/LSSTracker/main/loader.user.js
+// @downloadURL  https://raw.githubusercontent.com/zorlex25/LSSTracker/main/loader.user.js
+// ==/UserScript==
+
 ;(async () => {
   // 🔐 Configuration
   const CONFIG = {
